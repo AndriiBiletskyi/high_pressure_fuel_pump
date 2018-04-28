@@ -1,0 +1,29 @@
+RAM Allocation
+Variable                                                          Address   Size
+--------------------------------------------------------------------------------
+count                                                             0x0160       4
+speed                                                             0x0164       4
+left                                                              0x0168       2
+is_but_pres                                                       0x016A       1
+is_stop                                                           0x016B       1
+pause                                                             0x016C       2
+pause_start                                                       0x016E       2
+pause_stop                                                        0x0170       2
+is_start_pres                                                     0x0172       1
+rele                                                              0x0173       1
+pause                                                             0x0174       2
+
+EEPROM Allocation
+Variable                                                          Address   Size
+--------------------------------------------------------------------------------
+
+Register Allocation
+Variable                                                          Register  Size
+--------------------------------------------------------------------------------
+A1                                                                R5           1
+A2                                                                R4           1
+A3                                                                R7           1
+A4                                                                R6           1
+speed_show                                                        R8,R9        2
+en_speed_measure                                                  R11          1
+cycles                                                            R12,R13      2

@@ -1,0 +1,396 @@
+/*****************************************************
+Chip type               : ATmega8
+Program type            : Application
+AVR Core Clock frequency: 16,000000 MHz
+Memory model            : Small
+External RAM size       : 0
+Data Stack size         : 256
+*****************************************************/
+
+#include <mega8.h>
+#include <delay.h>
+#include <spi.h>
+
+#define PLUS        (PINC.1==0)
+#define MINUS       (PINC.0==0)
+#define START       (PINC.2==0)
+#define CS_ON       PORTB&=~(1<<2);
+#define CS_OFF      PORTB|=(1<<2);
+#define DELAY       400
+#define STEP_CYKLE  10
+#define MAX_CYKLE   990
+#define MIN_CYKLE   0
+
+
+static flash unsigned char digit[]={
+    0b10000001, //0
+    0b11110011, //1
+    0b01001001, //2
+    0b01100001, //3
+    0b00110011, //4
+    0b00100101, //5
+    0b00000101, //6
+    0b11110001, //7
+    0b00000001, //8
+    0b00100001  //9
+};
+char A1=0,A2=0,A3=0,A4=0;
+unsigned long int count = 0;
+unsigned long int speed = 0;
+unsigned int speed_show = 0;
+char en_speed_measure = 0;
+int cycles = 400;
+int left = 0;
+
+void init(void);//Initialization of the entire periphery
+interrupt [TIM0_OVF] void timer0_ovf_isr(void);//counting time
+interrupt [TIM1_CAPT] void timer1_capt_isr(void);//counting speed
+void sem_seg(int a);//definition of the value of segments
+void buttons(void);//processing of buttons strokes
+void send_hc595(char anods, char led_1, char led_2);//data transfer  
+void set_speed(void);//setting the speed
+void set_timer(char mode);//setting timer's mode
+
+void main(void)
+{
+    char led_anods  = 0b11111111;
+    char led_first  = 0b11111111;
+    char led_second = 0b11111111;
+    char first_indikator    = 1;
+    char second_indikator   = 5;  
+    
+    init();
+    
+while (1)
+      {     
+        led_anods = 0b11111111;   
+        
+        first_indikator++;
+        
+        if(speed_show<10){
+            if(first_indikator>4)
+                first_indikator = 4;
+        }
+        
+        if((speed_show>=10) && (speed_show<100)){
+            if(first_indikator>4)
+                first_indikator = 3;
+        }
+         
+        if((speed_show>=100) && (speed_show<1000)){
+            if(first_indikator>4)
+                first_indikator = 2;
+        }           
+        
+        if(speed_show>=1000){
+            if(first_indikator>4)
+                first_indikator = 1;
+        }
+        
+        second_indikator++;
+        
+        if(second_indikator>7)
+            second_indikator = 5;
+            
+        led_anods&=~(1<<first_indikator);
+        led_anods&=~(1<<second_indikator);
+        
+        sem_seg(left);
+        
+        if(second_indikator==5)
+            led_second = digit[A3];
+            
+        if(second_indikator==6)
+            led_second = digit[A2];
+            
+        if(second_indikator==7)
+            led_second = digit[A1];        
+      
+        sem_seg(speed_show);
+        
+        if(first_indikator==1)
+            led_first = digit[A4];
+            
+        if(first_indikator==2)
+            led_first = digit[A3];
+            
+        if(first_indikator==3)
+            led_first = digit[A2];
+            
+        if(first_indikator==4)
+            led_first = digit[A1]; 
+        
+        send_hc595(led_anods,led_first,led_second); 
+        
+        buttons();
+        set_speed();
+        
+      }
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+interrupt [TIM0_OVF] void timer0_ovf_isr(void)
+{
+   count++;
+   
+   if(count>98){
+        count = 0;
+        speed = 0;
+        en_speed_measure = 0;
+   }    
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+interrupt [TIM1_CAPT] void timer1_capt_isr(void)
+{
+    if(en_speed_measure){
+        speed = 250000/(count*256 + TCNT0);
+        TCNT0 = 1;
+        count = 0;         
+    }
+    en_speed_measure = 1;
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+void sem_seg(int a)
+{
+    A1=a%10;
+    A2=(a%100)/10;
+    A3=(a%1000)/100;
+    A4=(a%10000)/1000;
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+void buttons(void)
+{
+    static char is_but_pres = 0;
+    static char is_stop = 0;
+    static unsigned int pause = 0;
+    static unsigned int pause_start = 0;
+    static unsigned int pause_stop = 0;
+    static char is_start_pres = 0;
+    static char rele = 0;
+    
+    if(PLUS){
+        if(!is_but_pres){
+            cycles += STEP_CYKLE;
+                
+            if(cycles>MAX_CYKLE)
+                cycles = MIN_CYKLE;
+                    
+            is_but_pres = 1;
+        }
+    } 
+        
+    if(MINUS){
+        if(!is_but_pres){
+            cycles -= STEP_CYKLE; 
+                
+            if(cycles<MIN_CYKLE)
+                cycles = MAX_CYKLE;
+                
+            is_but_pres = 1;
+        }
+    }
+        
+    if(is_but_pres){
+        pause++;    
+        if(pause>DELAY){
+            is_but_pres = 0;
+            pause = 0;
+        }
+    }
+        
+    if(START)
+        is_start_pres = 1;
+        
+    if(is_start_pres && !is_stop){
+        pause_start++;
+        if(pause_start>4*DELAY){
+            if(START){
+                is_stop = 1;
+            }else{  
+                is_start_pres = 0; 
+                pause_start = 0;
+                if(rele){
+                    rele = 0;
+                }else {
+                    rele = 1;             
+                }
+                
+                if(rele){
+                    set_timer(3);
+                }else {
+                    set_timer(2);
+                }
+            }
+        }
+            
+    }        
+        
+    if(is_stop){
+        pause_stop++;
+        rele = 0;        
+        set_timer(1);
+        if(pause_stop>5*DELAY){
+            is_start_pres = 0;
+            pause_start = 0;
+            is_stop = 0;
+            pause_stop=0;
+        }
+    }         
+                
+    left = cycles - TCNT1/60;
+    
+    if(left<1){
+        left = 0;
+        rele = 0; 
+        set_timer(1);
+    }
+        
+    if(rele){
+        PORTD|=(1<<7);
+    }else {
+        PORTD&=~(1<<7);
+    }
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+void set_timer(char mode)
+{
+    /*
+        MODES:
+        0 - disable, reset counter
+        1 - enable interrupt from each puls, disable counting pulses, reset counter
+        2 - enable interrupt from each puls, disable counting pulses
+        3 - enable interrupt from each puls, enable counting pulses
+    */
+    switch(mode)
+    {
+        case 0: TCCR1B = 0x00;
+                TCNT1H = 0x00;
+                TCNT1L = 0x00;
+            break;
+            
+        case 1: TCCR1B = 0x40;
+                TCNT1H = 0x00;
+                TCNT1L = 0x00;
+            break;
+            
+        case 2: TCCR1B = 0x40;
+            break;
+        
+        case 3: TCCR1B = 0x47;
+            break;
+                         
+        default:    
+    }    
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+void set_speed(void)
+{
+    static unsigned int pause = 0;
+    
+    if(pause>2*DELAY){
+        speed_show = speed;
+        pause = 0;
+    }
+    pause++;
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+void send_hc595(char anods, char led_1, char led_2)
+{
+    CS_ON
+    SPDR = anods;
+    while(!(SPSR & (1<<SPIF))){}
+    SPDR = led_2;
+    while(!(SPSR & (1<<SPIF))){}
+    SPDR = led_1;
+    while(!(SPSR & (1<<SPIF))){}
+    CS_OFF    
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
+void init(void)
+{
+ // Input/Output Ports initialization
+// Port B initialization
+// Func7=In Func6=In Func5=Out Func4=In Func3=Out Func2=Out Func1=In Func0=In 
+// State7=T State6=T State5=0 State4=T State3=0 State2=0 State1=T State0=T 
+PORTB=0x00;
+DDRB=0b00101110;
+
+// Port C initialization
+// Func6=In Func5=In Func4=In Func3=In Func2=In Func1=In Func0=In 
+// State6=T State5=T State4=T State3=T State2=T State1=T State0=T 
+PORTC=0b0011111;
+DDRC=0b0000000;
+
+// Port D initialization
+// Func7=In Func6=In Func5=In Func4=In Func3=In Func2=In Func1=In Func0=In 
+// State7=T State6=T State5=T State4=T State3=T State2=T State1=T State0=T 
+PORTD=0b00100000;
+DDRD=0b10000000;
+
+// Timer/Counter 0 initialization
+// Clock source: System Clock
+// Clock value: 250,000 kHz
+TCCR0=0x03;
+TCNT0=0x00;
+
+// Timer/Counter 1 initialization
+// Clock source: System Clock
+// Clock value: Timer1 Stopped
+// Mode: Normal top=0xFFFF
+// OC1A output: Discon.
+// OC1B output: Discon.
+// Noise Canceler: Off
+// Input Capture on Rising Edge
+// Timer1 Overflow Interrupt: Off
+// Input Capture Interrupt: On
+// Compare A Match Interrupt: Off
+// Compare B Match Interrupt: Off
+TCCR1A=0x00;
+TCCR1B=0x40;  //TCCR1B=0x40; impuls prerblvanie,  TCCR1B=0x47; s4et i prerblvanie
+TCNT1H=0x00;
+TCNT1L=0x00;
+ICR1H=0x00;
+ICR1L=0x00;
+OCR1AH=0x00;
+OCR1AL=0x00;
+OCR1BH=0x00;
+OCR1BL=0x00;
+
+// Timer(s)/Counter(s) Interrupt(s) initialization
+TIMSK=0x21;
+
+// Analog Comparator initialization
+// Analog Comparator: Off
+// Analog Comparator Input Capture by Timer/Counter 1: Off
+ACSR=0x80;
+SFIOR=0x00;
+             
+// SPI initialization
+// SPI Type: Master
+// SPI Clock Rate: 125,000 kHz
+// SPI Clock Phase: Cycle Start
+// SPI Clock Polarity: High
+// SPI Data Order: MSB First
+SPCR=0x53;//5b
+SPSR=0x00;
+
+#asm("sei")
+}
+//-----------------------------------------------------------
+//
+//-----------------------------------------------------------
